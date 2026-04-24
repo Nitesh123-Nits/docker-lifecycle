@@ -1,0 +1,1590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Docker Container Lifecycle — System Design Guide</title>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600&family=Syne:wght@400;600;700;800&family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0d0f14;
+    --surface: #13161e;
+    --surface2: #1a1e28;
+    --surface3: #1f2433;
+    --border: #2a2f3d;
+    --border-hi: #3a4050;
+
+    --app-clr: #4ade80;
+    --app-dim: #1e3a2a;
+    --build-clr: #a78bfa;
+    --build-dim: #2d1f4a;
+    --storage-clr: #fb923c;
+    --storage-dim: #3a2010;
+    --runtime-clr: #38bdf8;
+    --runtime-dim: #0f2d3a;
+    --exec-clr: #60a5fa;
+    --exec-dim: #0f1f3a;
+    --stop-clr: #f87171;
+    --stop-dim: #3a1010;
+
+    --text: #e2e8f0;
+    --text-dim: #94a3b8;
+    --text-muted: #4a5568;
+    --accent: #facc15;
+    --accent2: #f472b6;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'IBM Plex Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* HEADER */
+  header {
+    background: linear-gradient(135deg, #0d0f14 0%, #13161e 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 2rem 1.5rem 1.5rem;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    backdrop-filter: blur(12px);
+  }
+
+  .header-inner {
+    max-width: 1280px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+  }
+
+  .logo-icon {
+    width: 38px; height: 38px;
+    background: linear-gradient(135deg, #0ea5e9, #a78bfa);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.1rem;
+  }
+
+  .logo-text {
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: 1.05rem;
+    letter-spacing: -.01em;
+    color: #fff;
+  }
+
+  .logo-sub {
+    font-size: .65rem;
+    color: var(--text-dim);
+    font-family: 'Fira Code', monospace;
+    letter-spacing: .08em;
+  }
+
+  nav {
+    display: flex;
+    gap: .4rem;
+    flex-wrap: wrap;
+  }
+
+  .nav-btn {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: 'Fira Code', monospace;
+    font-size: .65rem;
+    padding: .35rem .75rem;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all .2s;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .nav-btn:hover, .nav-btn.active {
+    background: var(--surface3);
+    border-color: var(--border-hi);
+    color: var(--text);
+  }
+
+  .nav-btn.active { color: var(--accent); border-color: var(--accent); }
+
+  /* MAIN */
+  .main {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 1.5rem;
+  }
+
+  /* TABS */
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* ========== OVERVIEW TAB ========== */
+  .hero {
+    margin-bottom: 2rem;
+    padding: 2rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at 20% 50%, rgba(14,165,233,.07) 0%, transparent 60%),
+                radial-gradient(ellipse at 80% 20%, rgba(167,139,250,.07) 0%, transparent 60%);
+    pointer-events: none;
+  }
+
+  .hero-title {
+    font-family: 'Syne', sans-serif;
+    font-size: clamp(1.6rem, 4vw, 2.4rem);
+    font-weight: 800;
+    line-height: 1.1;
+    margin-bottom: .75rem;
+  }
+
+  .hero-title span { color: #38bdf8; }
+
+  .hero-desc {
+    color: var(--text-dim);
+    font-size: .8rem;
+    line-height: 1.7;
+    max-width: 700px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .tag-row {
+    margin-top: 1.25rem;
+    display: flex;
+    gap: .5rem;
+    flex-wrap: wrap;
+  }
+
+  .tag {
+    font-size: .6rem;
+    font-family: 'Fira Code', monospace;
+    padding: .25rem .6rem;
+    border-radius: 3px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+
+  /* PIPELINE DIAGRAM */
+  .pipeline-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--text-dim);
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    margin-bottom: 1.25rem;
+  }
+
+  .pipeline-title span { color: var(--accent); font-size: .75rem; margin-left: .5rem; font-weight: 400; }
+
+  .pipeline-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: .5rem;
+  }
+
+  .pipeline-wrap::-webkit-scrollbar { height: 4px; }
+  .pipeline-wrap::-webkit-scrollbar-track { background: var(--surface2); border-radius: 2px; }
+  .pipeline-wrap::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 2px; }
+
+  .stages-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    min-width: 900px;
+  }
+
+  .stage-row {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem 1.5rem;
+    position: relative;
+    transition: border-color .2s;
+  }
+
+  .stage-row:hover { border-color: var(--border-hi); }
+
+  .stage-label {
+    font-family: 'Fira Code', monospace;
+    font-size: .6rem;
+    font-weight: 600;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+  }
+
+  .stage-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  .stage-app .stage-label { color: var(--app-clr); }
+  .stage-build .stage-label { color: var(--build-clr); }
+  .stage-storage .stage-label { color: var(--storage-clr); }
+  .stage-runtime .stage-label { color: var(--runtime-clr); }
+  .stage-exec .stage-label { color: var(--exec-clr); }
+  .stage-stop .stage-label { color: var(--stop-clr); }
+
+  .stage-app { border-left: 3px solid var(--app-clr); }
+  .stage-build { border-left: 3px solid var(--build-clr); }
+  .stage-storage { border-left: 3px solid var(--storage-clr); }
+  .stage-runtime { border-left: 3px solid var(--runtime-clr); }
+  .stage-exec { border-left: 3px solid var(--exec-clr); }
+  .stage-stop { border-left: 3px solid var(--stop-clr); }
+
+  .nodes-row {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex-wrap: nowrap;
+  }
+
+  .node {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 110px;
+    flex-shrink: 0;
+  }
+
+  .node-box {
+    padding: .55rem .7rem;
+    border-radius: 7px;
+    text-align: center;
+    font-family: 'Fira Code', monospace;
+    font-size: .65rem;
+    font-weight: 500;
+    line-height: 1.35;
+    min-width: 90px;
+    cursor: pointer;
+    transition: all .2s;
+    border: 1px solid transparent;
+    position: relative;
+  }
+
+  .node-box:hover { transform: translateY(-2px); filter: brightness(1.15); }
+
+  .node-app .node-box { background: var(--app-dim); color: var(--app-clr); border-color: rgba(74,222,128,.25); }
+  .node-build .node-box { background: var(--build-dim); color: var(--build-clr); border-color: rgba(167,139,250,.25); }
+  .node-storage .node-box { background: var(--storage-dim); color: var(--storage-clr); border-color: rgba(251,146,60,.25); }
+  .node-runtime .node-box { background: var(--runtime-dim); color: var(--runtime-clr); border-color: rgba(56,189,248,.25); }
+  .node-exec .node-box { background: var(--exec-dim); color: var(--exec-clr); border-color: rgba(96,165,250,.25); }
+  .node-stop .node-box { background: var(--stop-dim); color: var(--stop-clr); border-color: rgba(248,113,113,.25); }
+
+  .arrow {
+    display: flex;
+    align-items: center;
+    padding: 0 .3rem;
+    color: var(--text-muted);
+    font-size: .9rem;
+    flex-shrink: 0;
+  }
+
+  .arrow svg { width: 22px; height: 14px; }
+
+  /* TOOLTIP */
+  .tooltip-wrap { position: relative; display: inline-block; width: 100%; }
+  .tooltip {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--surface3);
+    border: 1px solid var(--border-hi);
+    border-radius: 6px;
+    padding: .6rem .8rem;
+    font-size: .6rem;
+    color: var(--text);
+    white-space: nowrap;
+    z-index: 200;
+    pointer-events: none;
+    line-height: 1.5;
+    min-width: 160px;
+    text-align: left;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5);
+  }
+  .tooltip strong { color: var(--accent); display: block; margin-bottom: .25rem; }
+  .tooltip-wrap:hover .tooltip { display: block; }
+
+  /* ========== STAGES DETAIL ========== */
+  .stages-detail {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 1rem;
+  }
+
+  .stage-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    transition: border-color .2s, transform .2s;
+  }
+
+  .stage-card:hover { border-color: var(--border-hi); transform: translateY(-2px); }
+
+  .stage-card-header {
+    padding: 1rem 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .stage-icon {
+    width: 32px; height: 32px;
+    border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: .9rem;
+    flex-shrink: 0;
+  }
+
+  .stage-card-title {
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    font-size: .85rem;
+  }
+
+  .stage-card-sub {
+    font-size: .6rem;
+    color: var(--text-dim);
+    font-family: 'Fira Code', monospace;
+    margin-top: .15rem;
+  }
+
+  .stage-card-body {
+    padding: 1rem 1.25rem;
+  }
+
+  .step-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: .6rem;
+  }
+
+  .step-item {
+    display: flex;
+    gap: .75rem;
+    align-items: flex-start;
+    font-size: .7rem;
+    line-height: 1.5;
+  }
+
+  .step-num {
+    min-width: 20px; height: 20px;
+    border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Fira Code', monospace;
+    font-size: .6rem;
+    font-weight: 600;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  .step-text { color: var(--text-dim); }
+  .step-text strong { color: var(--text); font-weight: 500; }
+
+  .step-cmd {
+    margin-top: .35rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: .3rem .6rem;
+    font-family: 'Fira Code', monospace;
+    font-size: .6rem;
+    color: var(--accent);
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  /* ========== COMMANDS TAB ========== */
+  .cmd-section { margin-bottom: 2rem; }
+
+  .section-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 1rem;
+    font-weight: 700;
+    margin-bottom: 1rem;
+    padding-bottom: .5rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+  }
+
+  .section-title .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+  }
+
+  .cmd-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: .75rem;
+  }
+
+  .cmd-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.1rem;
+    transition: border-color .2s;
+  }
+
+  .cmd-card:hover { border-color: var(--border-hi); }
+
+  .cmd-name {
+    font-family: 'Fira Code', monospace;
+    font-size: .75rem;
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: .25rem;
+  }
+
+  .cmd-desc {
+    font-size: .65rem;
+    color: var(--text-dim);
+    margin-bottom: .5rem;
+    line-height: 1.5;
+  }
+
+  .cmd-code {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: .45rem .6rem;
+    font-family: 'Fira Code', monospace;
+    font-size: .62rem;
+    color: #a5f3fc;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  .cmd-code::-webkit-scrollbar { height: 2px; }
+  .cmd-code::-webkit-scrollbar-thumb { background: var(--border-hi); }
+
+  /* ========== INTERNALS TAB ========== */
+  .internals-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 1rem;
+  }
+
+  .info-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem;
+    transition: border-color .2s;
+  }
+
+  .info-card:hover { border-color: var(--border-hi); }
+
+  .info-card-title {
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    font-size: .85rem;
+    margin-bottom: .75rem;
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+  }
+
+  .info-card-title .emoji { font-size: 1rem; }
+
+  .info-body {
+    font-size: .68rem;
+    color: var(--text-dim);
+    line-height: 1.7;
+  }
+
+  .info-body p { margin-bottom: .5rem; }
+  .info-body strong { color: var(--text); font-weight: 500; }
+
+  .kv-list {
+    display: flex;
+    flex-direction: column;
+    gap: .4rem;
+    margin-top: .5rem;
+  }
+
+  .kv {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: .35rem .6rem;
+    font-size: .62rem;
+    font-family: 'Fira Code', monospace;
+  }
+
+  .kv-key { color: var(--text-dim); }
+  .kv-val { color: var(--accent2); font-weight: 500; }
+
+  /* ========== INTERVIEW TAB ========== */
+  .qa-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .qa-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    transition: border-color .2s;
+  }
+
+  .qa-item:hover { border-color: var(--border-hi); }
+
+  .qa-q {
+    padding: 1rem 1.25rem;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    font-family: 'Syne', sans-serif;
+    font-weight: 600;
+    font-size: .8rem;
+    user-select: none;
+    transition: background .2s;
+  }
+
+  .qa-q:hover { background: var(--surface2); }
+
+  .qa-q-text { flex: 1; line-height: 1.45; }
+
+  .qa-arrow {
+    font-size: .7rem;
+    color: var(--text-muted);
+    transition: transform .25s;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .qa-item.open .qa-arrow { transform: rotate(90deg); color: var(--accent); }
+
+  .qa-a {
+    display: none;
+    padding: 0 1.25rem 1rem;
+    font-size: .7rem;
+    color: var(--text-dim);
+    line-height: 1.7;
+    border-top: 1px solid var(--border);
+  }
+
+  .qa-item.open .qa-a { display: block; }
+
+  .qa-a p { margin-bottom: .5rem; }
+  .qa-a p:last-child { margin-bottom: 0; }
+  .qa-a strong { color: var(--text); font-weight: 500; }
+
+  .qa-a code {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: .1rem .35rem;
+    font-family: 'Fira Code', monospace;
+    font-size: .6rem;
+    color: var(--accent);
+  }
+
+  .diff-tag {
+    display: inline-block;
+    font-size: .55rem;
+    font-family: 'Fira Code', monospace;
+    font-weight: 600;
+    padding: .15rem .4rem;
+    border-radius: 3px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    margin-right: .35rem;
+  }
+
+  .diff-e { background: rgba(74,222,128,.15); color: var(--app-clr); }
+  .diff-m { background: rgba(251,146,60,.15); color: var(--storage-clr); }
+  .diff-h { background: rgba(248,113,113,.15); color: var(--stop-clr); }
+
+  /* ========== ARCHITECTURE SVG ========== */
+  .arch-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem;
+    overflow-x: auto;
+    margin-bottom: 1.5rem;
+  }
+
+  .arch-svg { min-width: 800px; width: 100%; }
+
+  /* RESPONSIVE */
+  @media (max-width: 600px) {
+    header { padding: 1rem; }
+    .main { padding: 1rem; }
+    .hero { padding: 1.25rem; }
+    .hero-title { font-size: 1.4rem; }
+    .stages-detail { grid-template-columns: 1fr; }
+    .cmd-grid { grid-template-columns: 1fr; }
+    .internals-grid { grid-template-columns: 1fr; }
+    nav { gap: .3rem; }
+    .nav-btn { font-size: .58rem; padding: .3rem .55rem; }
+  }
+
+  /* ANIMATIONS */
+  .fade-in { animation: fadeIn .4s ease forwards; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+  .node-box { animation: nodePop .4s ease backwards; }
+  @keyframes nodePop { from { opacity: 0; transform: scale(.85); } to { opacity: 1; transform: scale(1); } }
+
+  /* NODE DELAY */
+  .node:nth-child(1) .node-box { animation-delay: .05s; }
+  .node:nth-child(2) .node-box { animation-delay: .1s; }
+  .node:nth-child(3) .node-box { animation-delay: .15s; }
+  .node:nth-child(4) .node-box { animation-delay: .2s; }
+  .node:nth-child(5) .node-box { animation-delay: .25s; }
+  .node:nth-child(6) .node-box { animation-delay: .3s; }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    font-family: 'Fira Code', monospace;
+    font-size: .6rem;
+    padding: .25rem .65rem;
+    border-radius: 20px;
+    border: 1px solid;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <div class="logo">
+      <div class="logo-icon">🐳</div>
+      <div>
+        <div class="logo-text">Docker Container Lifecycle</div>
+        <div class="logo-sub">System Design Reference</div>
+      </div>
+    </div>
+    <nav id="nav">
+      <button class="nav-btn active" onclick="showTab('overview')">Overview</button>
+      <button class="nav-btn" onclick="showTab('stages')">Stage Details</button>
+      <button class="nav-btn" onclick="showTab('commands')">Commands</button>
+      <button class="nav-btn" onclick="showTab('internals')">Internals</button>
+      <button class="nav-btn" onclick="showTab('interview')">Interview Q&A</button>
+    </nav>
+  </div>
+</header>
+
+<main class="main">
+
+  <!-- ========== OVERVIEW ========== -->
+  <div id="tab-overview" class="tab-panel active fade-in">
+    <div class="hero">
+      <div class="hero-title">Docker Container<br><span>Lifecycle</span></div>
+      <div class="hero-desc">
+        A complete reference for how Docker containers are built, stored, deployed, and terminated —
+        from source code to running process and clean shutdown.
+      </div>
+      <div class="tag-row">
+        <span class="tag pill" style="color:var(--app-clr);border-color:rgba(74,222,128,.3);background:var(--app-dim)">✦ 6 Stages</span>
+        <span class="tag pill" style="color:var(--build-clr);border-color:rgba(167,139,250,.3);background:var(--build-dim)">◈ Layered FS</span>
+        <span class="tag pill" style="color:var(--runtime-clr);border-color:rgba(56,189,248,.3);background:var(--runtime-dim)">⚡ Namespace Isolation</span>
+        <span class="tag pill" style="color:var(--accent);border-color:rgba(250,204,21,.3);background:rgba(250,204,21,.05)">cgroups + overlayFS</span>
+      </div>
+    </div>
+
+    <div class="pipeline-title">Full Pipeline <span>hover nodes for details</span></div>
+
+    <div class="pipeline-wrap">
+      <div class="stages-grid">
+
+        <!-- APPLICATION STAGE -->
+        <div class="stage-row stage-app">
+          <div class="stage-label">① Application Stage</div>
+          <div class="nodes-row">
+            <div class="node node-app">
+              <div class="tooltip-wrap">
+                <div class="node-box">Write<br>App Code</div>
+                <div class="tooltip"><strong>Write App Code</strong>Your application source: Python, Node, Go, Java, etc. The foundation of everything.</div>
+              </div>
+            </div>
+            <div class="arrow"><svg viewBox="0 0 22 14" fill="none"><path d="M1 7h18M14 2l6 5-6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            <div class="node node-app">
+              <div class="tooltip-wrap">
+                <div class="node-box">Create<br>Dockerfile</div>
+                <div class="tooltip"><strong>Dockerfile</strong>Text file with instructions: FROM, RUN, COPY, CMD, EXPOSE, ENV, etc.</div>
+              </div>
+            </div>
+            <div class="arrow"><svg viewBox="0 0 22 14" fill="none"><path d="M1 7h18M14 2l6 5-6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            <div class="node node-app">
+              <div class="tooltip-wrap">
+                <div class="node-box">Define<br>Base Image</div>
+                <div class="tooltip"><strong>Base Image</strong>FROM ubuntu:22.04 or FROM python:3.11-slim. Sets the starting layer.</div>
+              </div>
+            </div>
+            <div class="arrow"><svg viewBox="0 0 22 14" fill="none"><path d="M1 7h18M14 2l6 5-6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            <div class="node node-app">
+              <div class="tooltip-wrap">
+                <div class="node-box">Add App<br>Code</div>
+                <div class="tooltip"><strong>COPY / ADD</strong>COPY . /app copies source into the image layer. Each instruction creates a new layer.</div>
+              </div>
+            </div>
+            <div class="arrow"><svg viewBox="0 0 22 14" fill="none"><path d="M1 7h18M14 2l6 5-6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            <div class="node node-app">
+              <div class="tooltip-wrap">
+                <div class="node-box">Install<br>Deps</div>
+                <div class="tooltip"><strong>RUN apt/pip/npm</strong>RUN pip install -r requirements.txt. Cached per layer if unchanged.</div>
+              </div>
+            </div>
+            <div class="arrow"><svg viewBox="0 0 22 14" fill="none"><path d="M1 7h18M14 2l6 5-6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            <div class="node node-app">
+              <div class="tooltip-wrap">
+                <div class="node-box">Define<br>Startup CMD</div>
+                <div class="tooltip"><strong>CMD / ENTRYPOINT</strong>CMD ["python", "app.py"] — defines what runs when container starts.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- IMAGE BUILD STAGE -->
+        <div class="stage-row stage-build">
+          <div class="stage-label">② Image Build Stage</div>
+          <div class="nodes-row">
+            <div class="node node-build">
+              <div class="tooltip-wrap">
+                <div class="node-box">Run<br>docker build</div>
+                <div class="tooltip"><strong>docker build</strong>docker build -t myapp:1.0 . sends context to Docker daemon.</div>
+              </div>
+            </div>
+            <div class="arrow"><svg viewBox="0 0 22 14" fill="none"><path d="M1 7h18M14 2l6 5-6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            <div class="node node-build">
+              <div class="tooltip-wrap">
+                <div class="node-box">Daemon<br>Reads DF</div>
+                <div class="tooltip"><strong>dockerd parses</strong>Docker daemon parses each Dockerfile instruction sequentially, checking build cache.</div>
+              </div>
+            </div>
+            <div class="arrow"><svg viewBox="0 0 22 14" fill="none"><path d="M1 7h18M14 2l6 5-6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            <div class="node node-build">
+              <div class="tooltip-wrap">
+                <div class="node-box">Build Image<br>Layers</div>
+                <div class="tooltip"><strong>OverlayFS Layers</strong>Each RUN/COPY creates a read-only layer stored as a content-addressed SHA256 hash.</div>
+              </div>
+            </div>
+            <div class="arrow"><svg viewBox="0 0 22 14" fill="none"><path d="M1 7h18M14 2l6 5-6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            <div class="node node-build">
+              <div class="tooltip-wrap">
+                <div class="node-box">Create Final<br>Docker Image</div>
+                <div class="tooltip"><strong>Manifest + Layers</strong>Image = manifest.json listing all layers + their SHA digests. Stored in /var/lib/docker.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- IMAGE STORAGE STAGE -->
+        <div class="stage-row stage-storage">
+          <div class="stage-label">③ Image Storage Stage</div>
+          <div class="nodes-row">
+            <div class="node node-storage">
+              <div class="tooltip-wrap">
+                <div class="node-box">Tag<br>Docker Image</div>
+                <div class="tooltip"><strong>docker tag</strong>docker tag myapp:1.0 registry.io/org/myapp:1.0 — attaches human-readable name.</div>
+              </div>
+            </div>
+            <div class="arrow"><svg viewBox="0 0 22 14" fill="none"><path d="M1 7h18M14 2l6 5-6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            <div class="node node-storage">
+              <div class="tooltip-wrap">
+                <div class="node-box">Push to<br>Registry</div>
+                <div class="tooltip"><strong>docker push</strong>Uploads layers to Docker Hub, ECR, GCR, or Harbor. Only changed layers transferred.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- CONTAINER RUNTIME STAGE -->
+        <div class="stage-row stage-runtime">
+          <div class="stage-label">④ Container Runtime Stage</div>
+          <div class="nodes-row">
+            <div class="node node-runtime">
+              <div class="tooltip-wrap">
+                <div class="node-box">Run<br>docker run</div>
+                <div class="tooltip"><strong>docker run</strong>docker run -d -p 8080:80 myapp:1.0 — initiates container creation.</div>
+              </div>
+            </div>
+            <div class="arrow"><svg viewBox="0 0 22 14" fill="none"><path d="M1 7h18M14 2l6 5-6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            <div class="node node-runtime">
+              <div class="tooltip-wrap">
+                <div class="node-box">Docker Pulls<br>Image</div>
+                <div class="tooltip"><strong>docker pull</strong>If image not local, pulls from registry. Only missing layers are downloaded.</div>
+              </div>
+            </div>
+            <div class="arrow"><svg viewBox="0 0 22 14" fill="none"><path d="M1 7h18M14 2l6 5-6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            <div class="node node-runtime">
+              <div class="tooltip-wrap">
+                <div class="node-box">Create Container<br>from Image</div>
+                <div class="tooltip"><strong>Writable Layer</strong>Adds a thin writable layer on top of read-only image layers via OverlayFS.</div>
+              </div>
+            </div>
+            <div class="arrow"><svg viewBox="0 0 22 14" fill="none"><path d="M1 7h18M14 2l6 5-6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            <div class="node node-runtime">
+              <div class="tooltip-wrap">
+                <div class="node-box">Allocate CPU<br>& Memory</div>
+                <div class="tooltip"><strong>cgroups v2</strong>Linux control groups limit/track CPU shares, memory, block I/O, network bandwidth.</div>
+              </div>
+            </div>
+            <div class="arrow"><svg viewBox="0 0 22 14" fill="none"><path d="M1 7h18M14 2l6 5-6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            <div class="node node-runtime">
+              <div class="tooltip-wrap">
+                <div class="node-box">Attach Network<br>Interface</div>
+                <div class="tooltip"><strong>veth + bridge</strong>Virtual ethernet pair connects container to docker0 bridge. NAT for outbound traffic.</div>
+              </div>
+            </div>
+            <div class="arrow"><svg viewBox="0 0 22 14" fill="none"><path d="M1 7h18M14 2l6 5-6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            <div class="node node-runtime">
+              <div class="tooltip-wrap">
+                <div class="node-box">Start Container<br>Process</div>
+                <div class="tooltip"><strong>PID 1</strong>Your CMD/ENTRYPOINT runs as PID 1 inside the container's PID namespace.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- EXECUTION -->
+        <div class="stage-row stage-exec">
+          <div class="stage-label">⑤ Execution & Isolation</div>
+          <div class="nodes-row">
+            <div class="node node-exec">
+              <div class="tooltip-wrap">
+                <div class="node-box">Container Runs<br>Isolated</div>
+                <div class="tooltip"><strong>Linux Namespaces</strong>PID, NET, MNT, UTS, IPC, USER namespaces each isolate a resource dimension.</div>
+              </div>
+            </div>
+            <div class="arrow"><svg viewBox="0 0 22 14" fill="none"><path d="M1 7h18M14 2l6 5-6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            <div class="node node-exec">
+              <div class="tooltip-wrap">
+                <div class="node-box">Uses Host<br>OS Kernel</div>
+                <div class="tooltip"><strong>Shared Kernel</strong>Unlike VMs, containers share the host kernel. No hypervisor overhead. Faster start (~50ms).</div>
+              </div>
+            </div>
+            <div class="arrow"><svg viewBox="0 0 22 14" fill="none"><path d="M1 7h18M14 2l6 5-6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            <div class="node node-exec">
+              <div class="tooltip-wrap">
+                <div class="node-box">App Becomes<br>Accessible</div>
+                <div class="tooltip"><strong>Port Mapping</strong>-p 8080:80 maps host:8080 → container:80. App is now reachable.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- STOP AND REMOVE -->
+        <div class="stage-row stage-stop">
+          <div class="stage-label">⑥ Stop & Remove</div>
+          <div class="nodes-row">
+            <div class="node node-stop">
+              <div class="tooltip-wrap">
+                <div class="node-box">Stop<br>Container</div>
+                <div class="tooltip"><strong>SIGTERM → SIGKILL</strong>docker stop sends SIGTERM, waits 10s grace, then SIGKILL. Writable layer preserved.</div>
+              </div>
+            </div>
+            <div class="arrow"><svg viewBox="0 0 22 14" fill="none"><path d="M1 7h18M14 2l6 5-6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            <div class="node node-stop">
+              <div class="tooltip-wrap">
+                <div class="node-box">Remove<br>Container</div>
+                <div class="tooltip"><strong>docker rm</strong>Deletes the writable layer. Frees disk space. Image still exists untouched.</div>
+              </div>
+            </div>
+            <div class="arrow"><svg viewBox="0 0 22 14" fill="none"><path d="M1 7h18M14 2l6 5-6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            <div class="node node-stop">
+              <div class="tooltip-wrap">
+                <div class="node-box">Image Still<br>Exists</div>
+                <div class="tooltip"><strong>Image is Immutable</strong>The base image layers remain in /var/lib/docker. Run docker rmi to remove.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div><!-- /overview -->
+
+  <!-- ========== STAGES DETAIL ========== -->
+  <div id="tab-stages" class="tab-panel fade-in">
+    <div class="pipeline-title" style="margin-bottom:1.25rem">Stage Deep Dive</div>
+    <div class="stages-detail">
+
+      <div class="stage-card">
+        <div class="stage-card-header">
+          <div class="stage-icon" style="background:var(--app-dim)">📝</div>
+          <div>
+            <div class="stage-card-title" style="color:var(--app-clr)">Application Stage</div>
+            <div class="stage-card-sub">Write code → Dockerfile → Base image → Deps</div>
+          </div>
+        </div>
+        <div class="stage-card-body">
+          <ul class="step-list">
+            <li class="step-item">
+              <div class="step-num" style="background:var(--app-dim);color:var(--app-clr)">1</div>
+              <div class="step-text"><strong>Write Application Code</strong> — Your source in any language. This is the business logic that will run in the container.</div>
+            </li>
+            <li class="step-item">
+              <div class="step-num" style="background:var(--app-dim);color:var(--app-clr)">2</div>
+              <div class="step-text"><strong>Create Dockerfile</strong> — A plain text recipe. Each instruction maps to an image layer.
+                <div class="step-cmd">FROM python:3.11-slim</div>
+              </div>
+            </li>
+            <li class="step-item">
+              <div class="step-num" style="background:var(--app-dim);color:var(--app-clr)">3</div>
+              <div class="step-text"><strong>Define Base Image</strong> — Smaller base = smaller attack surface. Use distroless or alpine in prod.
+                <div class="step-cmd">FROM gcr.io/distroless/python3</div>
+              </div>
+            </li>
+            <li class="step-item">
+              <div class="step-num" style="background:var(--app-dim);color:var(--app-clr)">4</div>
+              <div class="step-text"><strong>Install Dependencies before copying code</strong> — Layer ordering matters for cache hits.
+                <div class="step-cmd">COPY requirements.txt . && RUN pip install -r requirements.txt</div>
+              </div>
+            </li>
+            <li class="step-item">
+              <div class="step-num" style="background:var(--app-dim);color:var(--app-clr)">5</div>
+              <div class="step-text"><strong>Define Startup Command</strong> — Use ENTRYPOINT for fixed binary, CMD for overridable defaults.
+                <div class="step-cmd">ENTRYPOINT ["gunicorn"] CMD ["app:app"]</div>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="stage-card">
+        <div class="stage-card-header">
+          <div class="stage-icon" style="background:var(--build-dim)">🔨</div>
+          <div>
+            <div class="stage-card-title" style="color:var(--build-clr)">Image Build Stage</div>
+            <div class="stage-card-sub">docker build → daemon → layers → image</div>
+          </div>
+        </div>
+        <div class="stage-card-body">
+          <ul class="step-list">
+            <li class="step-item">
+              <div class="step-num" style="background:var(--build-dim);color:var(--build-clr)">1</div>
+              <div class="step-text"><strong>docker build</strong> sends build context (tar archive) to the Docker daemon over a Unix socket.
+                <div class="step-cmd">docker build -t myapp:1.0 .</div>
+              </div>
+            </li>
+            <li class="step-item">
+              <div class="step-num" style="background:var(--build-dim);color:var(--build-clr)">2</div>
+              <div class="step-text"><strong>Daemon reads Dockerfile</strong> — Checks build cache for each instruction. Cache miss triggers re-execution of that layer and all subsequent layers.</div>
+            </li>
+            <li class="step-item">
+              <div class="step-num" style="background:var(--build-dim);color:var(--build-clr)">3</div>
+              <div class="step-text"><strong>Build Image Layers</strong> — Each instruction produces a content-addressed read-only layer stored in OverlayFS. Layers are shared across images.</div>
+            </li>
+            <li class="step-item">
+              <div class="step-num" style="background:var(--build-dim);color:var(--build-clr)">4</div>
+              <div class="step-text"><strong>Final Image</strong> — A manifest.json listing all layer digests + config (env vars, cmd, labels). Stored in <code style="font-family:Fira Code,monospace;font-size:.6rem;color:var(--accent)">/var/lib/docker/overlay2</code>.</div>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="stage-card">
+        <div class="stage-card-header">
+          <div class="stage-icon" style="background:var(--storage-dim)">📦</div>
+          <div>
+            <div class="stage-card-title" style="color:var(--storage-clr)">Image Storage Stage</div>
+            <div class="stage-card-sub">Tag → Push → Registry distribution</div>
+          </div>
+        </div>
+        <div class="stage-card-body">
+          <ul class="step-list">
+            <li class="step-item">
+              <div class="step-num" style="background:var(--storage-dim);color:var(--storage-clr)">1</div>
+              <div class="step-text"><strong>Tag the Image</strong> — Tags are mutable pointers to immutable image digests. Use semantic versioning.
+                <div class="step-cmd">docker tag myapp:1.0 org/myapp:v1.0.3</div>
+              </div>
+            </li>
+            <li class="step-item">
+              <div class="step-num" style="background:var(--storage-dim);color:var(--storage-clr)">2</div>
+              <div class="step-text"><strong>Push to Registry</strong> — Only layers not already present in registry are uploaded. Content-addressing enables dedup.
+                <div class="step-cmd">docker push org/myapp:v1.0.3</div>
+              </div>
+            </li>
+            <li class="step-item">
+              <div class="step-num" style="background:var(--storage-dim);color:var(--storage-clr)">3</div>
+              <div class="step-text"><strong>Registry options</strong> — Docker Hub (public), AWS ECR (private, IAM-integrated), GCR, Harbor (self-hosted), GitHub Container Registry.</div>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="stage-card">
+        <div class="stage-card-header">
+          <div class="stage-icon" style="background:var(--runtime-dim)">⚡</div>
+          <div>
+            <div class="stage-card-title" style="color:var(--runtime-clr)">Container Runtime Stage</div>
+            <div class="stage-card-sub">docker run → pull → create → allocate → start</div>
+          </div>
+        </div>
+        <div class="stage-card-body">
+          <ul class="step-list">
+            <li class="step-item">
+              <div class="step-num" style="background:var(--runtime-dim);color:var(--runtime-clr)">1</div>
+              <div class="step-text"><strong>docker run</strong> — CLI sends request to dockerd via /var/run/docker.sock. Daemon delegates to containerd.
+                <div class="step-cmd">docker run -d -p 8080:80 --memory=512m myapp</div>
+              </div>
+            </li>
+            <li class="step-item">
+              <div class="step-num" style="background:var(--runtime-dim);color:var(--runtime-clr)">2</div>
+              <div class="step-text"><strong>Image Pull</strong> — containerd pulls missing layers from registry, extracts to overlay2 storage.</div>
+            </li>
+            <li class="step-item">
+              <div class="step-num" style="background:var(--runtime-dim);color:var(--runtime-clr)">3</div>
+              <div class="step-text"><strong>Allocate Resources</strong> — cgroups v2 enforces CPU (shares/quota) and memory limits. OOM killer activates if limit exceeded.</div>
+            </li>
+            <li class="step-item">
+              <div class="step-num" style="background:var(--runtime-dim);color:var(--runtime-clr)">4</div>
+              <div class="step-text"><strong>Network Setup</strong> — runc creates veth pair, assigns container end to docker0 bridge, sets up NAT (iptables MASQUERADE).</div>
+            </li>
+            <li class="step-item">
+              <div class="step-num" style="background:var(--runtime-dim);color:var(--runtime-clr)">5</div>
+              <div class="step-text"><strong>Start Process</strong> — runc calls clone() syscall with namespace flags. Your CMD becomes PID 1 in the new namespaces.</div>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="stage-card">
+        <div class="stage-card-header">
+          <div class="stage-icon" style="background:var(--exec-dim)">🔒</div>
+          <div>
+            <div class="stage-card-title" style="color:var(--exec-clr)">Execution & Isolation</div>
+            <div class="stage-card-sub">Namespaces + cgroups + seccomp</div>
+          </div>
+        </div>
+        <div class="stage-card-body">
+          <ul class="step-list">
+            <li class="step-item">
+              <div class="step-num" style="background:var(--exec-dim);color:var(--exec-clr)">1</div>
+              <div class="step-text"><strong>Linux Namespaces</strong> — 7 namespace types isolate process visibility: PID, NET, MNT, UTS, IPC, USER, TIME.</div>
+            </li>
+            <li class="step-item">
+              <div class="step-num" style="background:var(--exec-dim);color:var(--exec-clr)">2</div>
+              <div class="step-text"><strong>Shared Host Kernel</strong> — No guest OS or hypervisor. Container sees its own process tree but all processes run on the same kernel.</div>
+            </li>
+            <li class="step-item">
+              <div class="step-num" style="background:var(--exec-dim);color:var(--exec-clr)">3</div>
+              <div class="step-text"><strong>seccomp profiles</strong> — Docker applies a default seccomp filter blocking ~44 dangerous syscalls (ptrace, reboot, etc.).</div>
+            </li>
+            <li class="step-item">
+              <div class="step-num" style="background:var(--exec-dim);color:var(--exec-clr)">4</div>
+              <div class="step-text"><strong>App is accessible</strong> — Port mappings via iptables DNAT rules route traffic from host:port to container IP:port.</div>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="stage-card">
+        <div class="stage-card-header">
+          <div class="stage-icon" style="background:var(--stop-dim)">🛑</div>
+          <div>
+            <div class="stage-card-title" style="color:var(--stop-clr)">Stop & Remove</div>
+            <div class="stage-card-sub">Graceful shutdown → cleanup → image persists</div>
+          </div>
+        </div>
+        <div class="stage-card-body">
+          <ul class="step-list">
+            <li class="step-item">
+              <div class="step-num" style="background:var(--stop-dim);color:var(--stop-clr)">1</div>
+              <div class="step-text"><strong>docker stop</strong> — Sends SIGTERM to PID 1. Default 10s grace period for graceful shutdown, then SIGKILL.
+                <div class="step-cmd">docker stop -t 30 &lt;container_id&gt;</div>
+              </div>
+            </li>
+            <li class="step-item">
+              <div class="step-num" style="background:var(--stop-dim);color:var(--stop-clr)">2</div>
+              <div class="step-text"><strong>docker rm</strong> — Removes the writable container layer from disk. Metadata and network cleanup. Image layers untouched.
+                <div class="step-cmd">docker rm &lt;container_id&gt;</div>
+              </div>
+            </li>
+            <li class="step-item">
+              <div class="step-num" style="background:var(--stop-dim);color:var(--stop-clr)">3</div>
+              <div class="step-text"><strong>Image persists</strong> — Base image layers remain in local cache. Use <code style="font-size:.6rem;font-family:Fira Code,monospace;color:var(--accent)">docker rmi</code> to remove image. <code style="font-size:.6rem;font-family:Fira Code,monospace;color:var(--accent)">docker system prune</code> for full cleanup.</div>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+    </div>
+  </div><!-- /stages -->
+
+  <!-- ========== COMMANDS ========== -->
+  <div id="tab-commands" class="tab-panel fade-in">
+
+    <div class="cmd-section">
+      <div class="section-title"><span class="dot" style="background:var(--build-clr)"></span>Build Commands</div>
+      <div class="cmd-grid">
+        <div class="cmd-card">
+          <div class="cmd-name">docker build</div>
+          <div class="cmd-desc">Build image from Dockerfile in current directory</div>
+          <div class="cmd-code">docker build -t myapp:1.0 .</div>
+        </div>
+        <div class="cmd-card">
+          <div class="cmd-name">docker build --no-cache</div>
+          <div class="cmd-desc">Force rebuild all layers, ignore build cache</div>
+          <div class="cmd-code">docker build --no-cache -t myapp:1.0 .</div>
+        </div>
+        <div class="cmd-card">
+          <div class="cmd-name">Multi-stage build</div>
+          <div class="cmd-desc">Separate build env from runtime — dramatically smaller images</div>
+          <div class="cmd-code">docker build --target production -t myapp .</div>
+        </div>
+        <div class="cmd-card">
+          <div class="cmd-name">Build with build args</div>
+          <div class="cmd-desc">Pass build-time variables to Dockerfile ARG instructions</div>
+          <div class="cmd-code">docker build --build-arg VERSION=2.1 -t myapp .</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cmd-section">
+      <div class="section-title"><span class="dot" style="background:var(--storage-clr)"></span>Registry Commands</div>
+      <div class="cmd-grid">
+        <div class="cmd-card">
+          <div class="cmd-name">docker tag</div>
+          <div class="cmd-desc">Tag image for push to specific registry/repo</div>
+          <div class="cmd-code">docker tag myapp:1.0 123.dkr.ecr.us-east-1.amazonaws.com/myapp:1.0</div>
+        </div>
+        <div class="cmd-card">
+          <div class="cmd-name">docker push</div>
+          <div class="cmd-desc">Upload image layers to registry (skips existing layers)</div>
+          <div class="cmd-code">docker push org/myapp:v1.0.3</div>
+        </div>
+        <div class="cmd-card">
+          <div class="cmd-name">docker pull</div>
+          <div class="cmd-desc">Download specific image version from registry</div>
+          <div class="cmd-code">docker pull python:3.11-slim</div>
+        </div>
+        <div class="cmd-card">
+          <div class="cmd-name">docker images</div>
+          <div class="cmd-desc">List locally cached images with sizes</div>
+          <div class="cmd-code">docker images --format "table {{.Repository}}\t{{.Size}}"</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cmd-section">
+      <div class="section-title"><span class="dot" style="background:var(--runtime-clr)"></span>Run & Lifecycle Commands</div>
+      <div class="cmd-grid">
+        <div class="cmd-card">
+          <div class="cmd-name">docker run (full)</div>
+          <div class="cmd-desc">Detached, port mapping, memory limit, auto-restart</div>
+          <div class="cmd-code">docker run -d -p 8080:80 --memory=512m --restart=always myapp</div>
+        </div>
+        <div class="cmd-card">
+          <div class="cmd-name">docker run -it</div>
+          <div class="cmd-desc">Interactive shell inside container for debugging</div>
+          <div class="cmd-code">docker run -it myapp /bin/bash</div>
+        </div>
+        <div class="cmd-card">
+          <div class="cmd-name">docker exec</div>
+          <div class="cmd-desc">Run command in a running container</div>
+          <div class="cmd-code">docker exec -it &lt;id&gt; /bin/sh</div>
+        </div>
+        <div class="cmd-card">
+          <div class="cmd-name">docker stop / kill</div>
+          <div class="cmd-desc">Graceful SIGTERM vs immediate SIGKILL</div>
+          <div class="cmd-code">docker stop -t 30 &lt;id&gt;  # graceful</div>
+        </div>
+        <div class="cmd-card">
+          <div class="cmd-name">docker ps</div>
+          <div class="cmd-desc">List running containers; -a for all including stopped</div>
+          <div class="cmd-code">docker ps -a --format "table {{.Names}}\t{{.Status}}"</div>
+        </div>
+        <div class="cmd-card">
+          <div class="cmd-name">docker logs</div>
+          <div class="cmd-desc">Stream container stdout/stderr output</div>
+          <div class="cmd-code">docker logs -f --tail=100 &lt;container_id&gt;</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cmd-section">
+      <div class="section-title"><span class="dot" style="background:var(--stop-clr)"></span>Cleanup Commands</div>
+      <div class="cmd-grid">
+        <div class="cmd-card">
+          <div class="cmd-name">docker rm</div>
+          <div class="cmd-desc">Remove stopped container and its writable layer</div>
+          <div class="cmd-code">docker rm $(docker ps -aq -f status=exited)</div>
+        </div>
+        <div class="cmd-card">
+          <div class="cmd-name">docker rmi</div>
+          <div class="cmd-desc">Remove image (and unshared layers) from local cache</div>
+          <div class="cmd-code">docker rmi myapp:1.0</div>
+        </div>
+        <div class="cmd-card">
+          <div class="cmd-name">docker system prune</div>
+          <div class="cmd-desc">Remove all stopped containers, dangling images, unused networks</div>
+          <div class="cmd-code">docker system prune -af --volumes</div>
+        </div>
+        <div class="cmd-card">
+          <div class="cmd-name">docker stats</div>
+          <div class="cmd-desc">Live CPU/memory/network usage of running containers</div>
+          <div class="cmd-code">docker stats --no-stream</div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /commands -->
+
+  <!-- ========== INTERNALS ========== -->
+  <div id="tab-internals" class="tab-panel fade-in">
+
+    <!-- Architecture SVG -->
+    <div class="arch-wrap">
+      <svg class="arch-svg" viewBox="0 0 820 280" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <!-- Host OS box -->
+        <rect x="1" y="1" width="818" height="278" rx="10" fill="#13161e" stroke="#2a2f3d"/>
+        <text x="16" y="22" font-family="Fira Code" font-size="10" fill="#4a5568" letter-spacing="1">HOST OS (Linux Kernel)</text>
+
+        <!-- Kernel features row -->
+        <rect x="12" y="30" width="796" height="44" rx="6" fill="#1a1e28" stroke="#2a2f3d"/>
+        <rect x="24" y="38" width="110" height="28" rx="4" fill="#1e3a2a" stroke="rgba(74,222,128,.3)"/>
+        <text x="79" y="57" font-family="Fira Code" font-size="9" fill="#4ade80" text-anchor="middle">namespaces</text>
+        <rect x="146" y="38" width="110" height="28" rx="4" fill="#2d1f4a" stroke="rgba(167,139,250,.3)"/>
+        <text x="201" y="57" font-family="Fira Code" font-size="9" fill="#a78bfa" text-anchor="middle">cgroups v2</text>
+        <rect x="268" y="38" width="110" height="28" rx="4" fill="#0f2d3a" stroke="rgba(56,189,248,.3)"/>
+        <text x="323" y="57" font-family="Fira Code" font-size="9" fill="#38bdf8" text-anchor="middle">overlayFS</text>
+        <rect x="390" y="38" width="110" height="28" rx="4" fill="#3a2010" stroke="rgba(251,146,60,.3)"/>
+        <text x="445" y="57" font-family="Fira Code" font-size="9" fill="#fb923c" text-anchor="middle">seccomp</text>
+        <rect x="512" y="38" width="110" height="28" rx="4" fill="#1f2433" stroke="#2a2f3d"/>
+        <text x="567" y="57" font-family="Fira Code" font-size="9" fill="#94a3b8" text-anchor="middle">iptables/netfilter</text>
+        <rect x="634" y="38" width="110" height="28" rx="4" fill="#1f2433" stroke="#2a2f3d"/>
+        <text x="689" y="57" font-family="Fira Code" font-size="9" fill="#94a3b8" text-anchor="middle">capabilities</text>
+
+        <!-- dockerd row -->
+        <rect x="12" y="86" width="300" height="44" rx="6" fill="#1a1e28" stroke="#2a2f3d"/>
+        <text x="18" y="101" font-family="Fira Code" font-size="8" fill="#4a5568" letter-spacing="1">DOCKER DAEMON</text>
+        <rect x="24" y="104" width="80" height="22" rx="3" fill="#0f1f3a" stroke="rgba(96,165,250,.3)"/>
+        <text x="64" y="119" font-family="Fira Code" font-size="8" fill="#60a5fa" text-anchor="middle">dockerd</text>
+        <rect x="116" y="104" width="90" height="22" rx="3" fill="#0f1f3a" stroke="rgba(96,165,250,.3)"/>
+        <text x="161" y="119" font-family="Fira Code" font-size="8" fill="#60a5fa" text-anchor="middle">containerd</text>
+        <rect x="218" y="104" width="80" height="22" rx="3" fill="#0f1f3a" stroke="rgba(96,165,250,.3)"/>
+        <text x="258" y="119" font-family="Fira Code" font-size="8" fill="#60a5fa" text-anchor="middle">runc/shim</text>
+        <!-- arrows -->
+        <path d="M104 115 L116 115" stroke="#2a2f3d" stroke-width="1" marker-end="url(#ah)"/>
+        <path d="M208 115 L218 115" stroke="#2a2f3d" stroke-width="1" marker-end="url(#ah)"/>
+
+        <!-- Containers -->
+        <rect x="330" y="86" width="480" height="186" rx="6" fill="#1a1e28" stroke="#2a2f3d"/>
+        <text x="338" y="101" font-family="Fira Code" font-size="8" fill="#4a5568" letter-spacing="1">CONTAINERS</text>
+
+        <!-- Container 1 -->
+        <rect x="342" y="108" width="136" height="150" rx="5" fill="#13161e" stroke="#3a4050"/>
+        <text x="410" y="124" font-family="Fira Code" font-size="8" fill="#94a3b8" text-anchor="middle">Container A</text>
+        <rect x="352" y="130" width="116" height="22" rx="3" fill="#1e3a2a" stroke="rgba(74,222,128,.25)"/>
+        <text x="410" y="145" font-family="Fira Code" font-size="7.5" fill="#4ade80" text-anchor="middle">App Process (PID1)</text>
+        <rect x="352" y="158" width="116" height="20" rx="3" fill="#1a1e28" stroke="#2a2f3d"/>
+        <text x="410" y="172" font-family="Fira Code" font-size="7" fill="#60a5fa" text-anchor="middle">writable layer</text>
+        <rect x="352" y="182" width="116" height="18" rx="3" fill="#1a1e28" stroke="#2a2f3d"/>
+        <text x="410" y="195" font-family="Fira Code" font-size="7" fill="#4a5568" text-anchor="middle">image layer 3</text>
+        <rect x="352" y="204" width="116" height="18" rx="3" fill="#1a1e28" stroke="#2a2f3d"/>
+        <text x="410" y="217" font-family="Fira Code" font-size="7" fill="#4a5568" text-anchor="middle">image layer 2</text>
+        <rect x="352" y="226" width="116" height="18" rx="3" fill="#1a1e28" stroke="#2a2f3d"/>
+        <text x="410" y="239" font-family="Fira Code" font-size="7" fill="#4a5568" text-anchor="middle">image layer 1 (base)</text>
+
+        <!-- Container 2 -->
+        <rect x="492" y="108" width="136" height="150" rx="5" fill="#13161e" stroke="#3a4050"/>
+        <text x="560" y="124" font-family="Fira Code" font-size="8" fill="#94a3b8" text-anchor="middle">Container B</text>
+        <rect x="502" y="130" width="116" height="22" rx="3" fill="#2d1f4a" stroke="rgba(167,139,250,.25)"/>
+        <text x="560" y="145" font-family="Fira Code" font-size="7.5" fill="#a78bfa" text-anchor="middle">App Process (PID1)</text>
+        <rect x="502" y="158" width="116" height="20" rx="3" fill="#1a1e28" stroke="#2a2f3d"/>
+        <text x="560" y="172" font-family="Fira Code" font-size="7" fill="#60a5fa" text-anchor="middle">writable layer</text>
+        <rect x="502" y="182" width="116" height="56" rx="3" fill="#1a1e28" stroke="#2a2f3d" stroke-dasharray="3,2"/>
+        <text x="560" y="214" font-family="Fira Code" font-size="7" fill="#4a5568" text-anchor="middle">shared image layers</text>
+        <text x="560" y="228" font-family="Fira Code" font-size="7" fill="#4a5568" text-anchor="middle">(read-only, deduped)</text>
+
+        <!-- Network box -->
+        <rect x="642" y="108" width="154" height="70" rx="5" fill="#13161e" stroke="#3a4050"/>
+        <text x="719" y="124" font-family="Fira Code" font-size="8" fill="#94a3b8" text-anchor="middle">Networking</text>
+        <rect x="652" y="132" width="64" height="18" rx="3" fill="#3a2010" stroke="rgba(251,146,60,.3)"/>
+        <text x="684" y="145" font-family="Fira Code" font-size="7" fill="#fb923c" text-anchor="middle">docker0 bridge</text>
+        <rect x="724" y="132" width="62" height="18" rx="3" fill="#3a2010" stroke="rgba(251,146,60,.3)"/>
+        <text x="755" y="145" font-family="Fira Code" font-size="7" fill="#fb923c" text-anchor="middle">veth pairs</text>
+        <rect x="652" y="154" width="134" height="18" rx="3" fill="#1a1e28" stroke="#2a2f3d"/>
+        <text x="719" y="167" font-family="Fira Code" font-size="7" fill="#4a5568" text-anchor="middle">iptables NAT / port mapping</text>
+
+        <!-- cgroups box -->
+        <rect x="642" y="188" width="154" height="48" rx="5" fill="#13161e" stroke="#3a4050"/>
+        <text x="719" y="204" font-family="Fira Code" font-size="8" fill="#94a3b8" text-anchor="middle">Resource Control</text>
+        <rect x="652" y="210" width="64" height="18" rx="3" fill="#0f2d3a" stroke="rgba(56,189,248,.3)"/>
+        <text x="684" y="223" font-family="Fira Code" font-size="7" fill="#38bdf8" text-anchor="middle">CPU cgroup</text>
+        <rect x="724" y="210" width="62" height="18" rx="3" fill="#0f2d3a" stroke="rgba(56,189,248,.3)"/>
+        <text x="755" y="223" font-family="Fira Code" font-size="7" fill="#38bdf8" text-anchor="middle">mem cgroup</text>
+
+        <!-- arrow defs -->
+        <defs>
+          <marker id="ah" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+            <path d="M0,0 L6,3 L0,6 Z" fill="#3a4050"/>
+          </marker>
+        </defs>
+      </svg>
+    </div>
+
+    <div class="internals-grid">
+      <div class="info-card">
+        <div class="info-card-title"><span class="emoji">🧱</span> OverlayFS & Image Layers</div>
+        <div class="info-body">
+          <p>Docker images are <strong>stacked read-only layers</strong> on OverlayFS. When a container starts, a thin writable layer is added on top.</p>
+          <p>Files are read from the uppermost layer that contains them. Writes go to the container layer (copy-on-write).</p>
+          <div class="kv-list">
+            <div class="kv"><span class="kv-key">lowerdir</span><span class="kv-val">image layers (R/O)</span></div>
+            <div class="kv"><span class="kv-key">upperdir</span><span class="kv-val">container layer (R/W)</span></div>
+            <div class="kv"><span class="kv-key">workdir</span><span class="kv-val">OverlayFS internal</span></div>
+            <div class="kv"><span class="kv-key">merged</span><span class="kv-val">unified view</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="info-card">
+        <div class="info-card-title"><span class="emoji">🔒</span> Linux Namespaces</div>
+        <div class="info-body">
+          <p>Namespaces make a container believe it has its own isolated system. Created via <strong>clone()</strong> syscall with flags.</p>
+          <div class="kv-list">
+            <div class="kv"><span class="kv-key">CLONE_NEWPID</span><span class="kv-val">Process isolation</span></div>
+            <div class="kv"><span class="kv-key">CLONE_NEWNET</span><span class="kv-val">Network stack</span></div>
+            <div class="kv"><span class="kv-key">CLONE_NEWNS</span><span class="kv-val">Mount points</span></div>
+            <div class="kv"><span class="kv-key">CLONE_NEWUTS</span><span class="kv-val">Hostname</span></div>
+            <div class="kv"><span class="kv-key">CLONE_NEWIPC</span><span class="kv-val">IPC resources</span></div>
+            <div class="kv"><span class="kv-key">CLONE_NEWUSER</span><span class="kv-val">UID/GID mapping</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="info-card">
+        <div class="info-card-title"><span class="emoji">⚖️</span> cgroups v2 Resource Control</div>
+        <div class="info-body">
+          <p>Control groups (cgroups) enforce <strong>resource limits, accounting, and isolation</strong> for CPU, memory, block I/O.</p>
+          <div class="kv-list">
+            <div class="kv"><span class="kv-key">cpu.max</span><span class="kv-val">quota/period</span></div>
+            <div class="kv"><span class="kv-key">memory.max</span><span class="kv-val">hard limit → OOM kill</span></div>
+            <div class="kv"><span class="kv-key">blkio.weight</span><span class="kv-val">disk I/O priority</span></div>
+            <div class="kv"><span class="kv-key">pids.max</span><span class="kv-val">process count limit</span></div>
+          </div>
+          <p style="margin-top:.5rem">docker run <code style="font-size:.6rem;font-family:Fira Code,monospace;color:var(--accent)">--cpus=1.5 --memory=512m</code></p>
+        </div>
+      </div>
+
+      <div class="info-card">
+        <div class="info-card-title"><span class="emoji">🌐</span> Container Networking</div>
+        <div class="info-body">
+          <p>Docker creates a <strong>virtual ethernet pair (veth)</strong>: one end in the container NET namespace, the other on the host's docker0 bridge.</p>
+          <div class="kv-list">
+            <div class="kv"><span class="kv-key">bridge mode</span><span class="kv-val">default, NAT via iptables</span></div>
+            <div class="kv"><span class="kv-key">host mode</span><span class="kv-val">shares host network stack</span></div>
+            <div class="kv"><span class="kv-key">none</span><span class="kv-val">no network access</span></div>
+            <div class="kv"><span class="kv-key">overlay</span><span class="kv-val">multi-host (Swarm/K8s)</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="info-card">
+        <div class="info-card-title"><span class="emoji">📐</span> Docker Daemon Stack</div>
+        <div class="info-body">
+          <p>The Docker CLI is just a REST client. The actual work is done by a layered stack:</p>
+          <div class="kv-list">
+            <div class="kv"><span class="kv-key">docker CLI</span><span class="kv-val">REST client</span></div>
+            <div class="kv"><span class="kv-key">dockerd</span><span class="kv-val">API server, image mgmt</span></div>
+            <div class="kv"><span class="kv-key">containerd</span><span class="kv-val">container lifecycle</span></div>
+            <div class="kv"><span class="kv-key">containerd-shim</span><span class="kv-val">daemonless containers</span></div>
+            <div class="kv"><span class="kv-key">runc</span><span class="kv-val">OCI runtime, calls kernel</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="info-card">
+        <div class="info-card-title"><span class="emoji">🆚</span> Container vs VM</div>
+        <div class="info-body">
+          <div class="kv-list">
+            <div class="kv"><span class="kv-key">Startup time</span><span class="kv-val">~50ms vs ~30s</span></div>
+            <div class="kv"><span class="kv-key">Kernel</span><span class="kv-val">shared vs own</span></div>
+            <div class="kv"><span class="kv-key">Isolation</span><span class="kv-val">namespace vs hypervisor</span></div>
+            <div class="kv"><span class="kv-key">Image size</span><span class="kv-val">MB vs GB</span></div>
+            <div class="kv"><span class="kv-key">Security</span><span class="kv-val">weaker vs stronger</span></div>
+            <div class="kv"><span class="kv-key">Density</span><span class="kv-val">100s/host vs 10s/host</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div><!-- /internals -->
+
+  <!-- ========== INTERVIEW ========== -->
+  <div id="tab-interview" class="tab-panel fade-in">
+    <div class="pipeline-title" style="margin-bottom:1.25rem">Interview Q&A</div>
+    <div class="qa-list">
+
+      <div class="qa-item">
+        <div class="qa-q" onclick="toggleQA(this)">
+          <span class="qa-q-text"><span class="diff-tag diff-e">Easy</span>What is the difference between a Docker image and a Docker container?</span>
+          <span class="qa-arrow">▶</span>
+        </div>
+        <div class="qa-a">
+          <p>A <strong>Docker image</strong> is a read-only template — a stack of immutable layers stored on disk, defined by a Dockerfile. It's like a class or blueprint. It has no running process and takes no CPU or memory.</p>
+          <p>A <strong>Docker container</strong> is a running instance of an image. When you run <code>docker run</code>, Docker adds a thin writable layer on top of the image layers and starts a process inside it. Multiple containers can share the same underlying image layers simultaneously (copy-on-write semantics).</p>
+          <p><strong>Analogy:</strong> Image = class definition. Container = object instantiated from that class.</p>
+        </div>
+      </div>
+
+      <div class="qa-item">
+        <div class="qa-q" onclick="toggleQA(this)">
+          <span class="qa-q-text"><span class="diff-tag diff-e">Easy</span>What happens when you run <code style="font-size:.7rem;font-family:Fira Code,monospace">docker run</code>?</span>
+          <span class="qa-arrow">▶</span>
+        </div>
+        <div class="qa-a">
+          <p>1. Docker CLI sends a REST request to <code>dockerd</code> via the Unix socket at <code>/var/run/docker.sock</code>.</p>
+          <p>2. <code>dockerd</code> checks if the image exists locally. If not, it pulls from the registry via <code>containerd</code>.</p>
+          <p>3. <code>containerd</code> creates a container specification (OCI bundle) and delegates to <code>runc</code>.</p>
+          <p>4. <code>runc</code> calls the Linux <code>clone()</code> syscall with namespace flags (PID, NET, MNT, UTS, IPC), setting up isolation. cgroups are configured for resource limits.</p>
+          <p>5. OverlayFS mounts the image layers (lowerdir) with a new writable layer (upperdir).</p>
+          <p>6. The network namespace is connected to the docker0 bridge via a veth pair.</p>
+          <p>7. Your <code>CMD</code> or <code>ENTRYPOINT</code> starts as PID 1 inside the container.</p>
+        </div>
+      </div>
+
+      <div class="qa-item">
+        <div class="qa-q" onclick="toggleQA(this)">
+          <span class="qa-q-text"><span class="diff-tag diff-m">Medium</span>How does Docker achieve isolation? Explain namespaces and cgroups.</span>
+          <span class="qa-arrow">▶</span>
+        </div>
+        <div class="qa-a">
+          <p><strong>Namespaces</strong> provide isolation by giving each container its own view of system resources. Key namespaces: <code>PID</code> (container sees its own process tree, its app is PID 1), <code>NET</code> (own network stack, interfaces, routing table), <code>MNT</code> (own filesystem mount points), <code>UTS</code> (own hostname), <code>IPC</code> (own shared memory and semaphores), <code>USER</code> (UID/GID mapping — root in container ≠ root on host).</p>
+          <p><strong>cgroups v2</strong> enforce resource limits. While namespaces control what a process can see, cgroups control how much it can use. Docker applies cgroup constraints for CPU quota (<code>cpu.max</code>), memory hard limit (<code>memory.max</code>), and PID count (<code>pids.max</code>). Exceeding the memory limit triggers the OOM killer.</p>
+          <p>Together, namespaces give isolation of visibility; cgroups give isolation of consumption.</p>
+        </div>
+      </div>
+
+      <div class="qa-item">
+        <div class="qa-q" onclick="toggleQA(this)">
+          <span class="qa-q-text"><span class="diff-tag diff-m">Medium</span>Explain Docker layer caching and how to optimize it.</span>
+          <span class="qa-arrow">▶</span>
+        </div>
+        <div class="qa-a">
+          <p>Each Dockerfile instruction creates a layer. Docker caches these layers using a content hash. If an instruction and its inputs haven't changed since the last build, Docker reuses the cached layer (cache hit).</p>
+          <p><strong>Critical rule:</strong> A cache miss on any layer invalidates all subsequent layers. So instruction order matters enormously.</p>
+          <p><strong>Optimization pattern:</strong> Copy dependency manifests first, install them (these change rarely), then copy app code (changes frequently):</p>
+          <p><code>COPY requirements.txt .</code> → <code>RUN pip install -r requirements.txt</code> → <code>COPY . .</code></p>
+          <p>This way, a code change only busts the last COPY layer, not the slow pip install layer. This can reduce rebuild time from minutes to seconds.</p>
+        </div>
+      </div>
+
+      <div class="qa-item">
+        <div class="qa-q" onclick="toggleQA(this)">
+          <span class="qa-q-text"><span class="diff-tag diff-m">Medium</span>What is a multi-stage build and why is it important?</span>
+          <span class="qa-arrow">▶</span>
+        </div>
+        <div class="qa-a">
+          <p>Multi-stage builds allow you to use multiple <code>FROM</code> instructions in a single Dockerfile. The key benefit: you can use a heavy build environment (with compilers, SDK, test tools) but copy only the compiled artifacts into a minimal runtime image.</p>
+          <p>Example: Stage 1 uses <code>golang:1.21</code> to compile a binary. Stage 2 uses <code>FROM scratch</code> (literally empty) and just <code>COPY --from=0 /app/binary /binary</code>. Final image is just a few MB instead of hundreds.</p>
+          <p><strong>Benefits:</strong> Dramatically smaller images → faster pulls, less attack surface, lower storage costs. Build secrets (API keys used during build) don't leak into the final image.</p>
+        </div>
+      </div>
+
+      <div class="qa-item">
+        <div class="qa-q" onclick="toggleQA(this)">
+          <span class="qa-q-text"><span class="diff-tag diff-h">Hard</span>How does OverlayFS work internally for Docker containers?</span>
+          <span class="qa-arrow">▶</span>
+        </div>
+        <div class="qa-a">
+          <p>OverlayFS is a union filesystem that merges multiple directory trees into a single view. Docker uses it as its default storage driver (<code>overlay2</code>).</p>
+          <p><strong>Structure:</strong> Image layers are the <code>lowerdir</code> stack (read-only). The container's writable layer is the <code>upperdir</code>. The <code>workdir</code> is used by OverlayFS for atomic operations. The <code>merged</code> directory is the unified view presented to the container.</p>
+          <p><strong>Read path:</strong> OverlayFS looks up files from upperdir first, then falls through to lowerdir layers top-to-bottom. This is O(n) for deep layer stacks.</p>
+          <p><strong>Write path (Copy-on-Write):</strong> Writing to an existing file copies the entire file from lowerdir to upperdir first, then modifies it. This means large files are expensive to modify — even a 1-byte change copies the whole file. This is a known limitation called write amplification.</p>
+          <p><strong>Delete path:</strong> Deleting a file creates a "whiteout file" in upperdir that masks the file in lowerdir. The file appears deleted in the merged view but the original layer is unchanged.</p>
+        </div>
+      </div>
+
+      <div class="qa-item">
+        <div class="qa-q" onclick="toggleQA(this)">
+          <span class="qa-q-text"><span class="diff-tag diff-h">Hard</span>What is the dockerd → containerd → runc architecture? Why was it decomposed?</span>
+          <span class="qa-arrow">▶</span>
+        </div>
+        <div class="qa-a">
+          <p>Originally Docker was a monolith. It was decomposed for several reasons: OCI standardization, Kubernetes compatibility, and daemon stability.</p>
+          <p><strong>dockerd</strong>: High-level daemon handling the Docker API, image management, build, volume/network management. Most users interact with this layer.</p>
+          <p><strong>containerd</strong>: OCI-compliant container runtime managing the lifecycle of containers: create, start, stop, delete, snapshot. Kubernetes uses containerd directly, bypassing dockerd entirely.</p>
+          <p><strong>containerd-shim</strong>: A per-container process that stays alive even if containerd is restarted. This makes containers "daemonless" — they survive daemon upgrades without restarting.</p>
+          <p><strong>runc</strong>: The lowest-level OCI runtime. Just responsible for creating the container: setting up namespaces, cgroups, and executing the init process via Linux syscalls. Exits after container starts.</p>
+          <p>This decomposition means Kubernetes can use containerd directly without Docker at all, which is why many managed K8s services removed the Docker shim in favor of direct containerd or cri-o.</p>
+        </div>
+      </div>
+
+      <div class="qa-item">
+        <div class="qa-q" onclick="toggleQA(this)">
+          <span class="qa-q-text"><span class="diff-tag diff-h">Hard</span>How does docker stop work? Why is signal handling in PID 1 critical?</span>
+          <span class="qa-arrow">▶</span>
+        </div>
+        <div class="qa-a">
+          <p><code>docker stop</code> sends <strong>SIGTERM</strong> to PID 1 inside the container, then waits a configurable grace period (default 10s). If the process hasn't exited, it sends <strong>SIGKILL</strong>.</p>
+          <p><strong>The PID 1 problem:</strong> In Linux, PID 1 has special behavior. Unlike other processes, PID 1 does not receive signals it hasn't explicitly handled — the default signal handlers (including for SIGTERM) are ignored by the kernel for PID 1.</p>
+          <p>If your app doesn't handle SIGTERM explicitly (e.g., a raw <code>python app.py</code> as CMD), it will ignore the signal and get SIGKILL'd after the grace period, preventing graceful shutdown (in-flight requests dropped, no DB connection cleanup).</p>
+          <p><strong>Solutions:</strong> Use <code>exec</code> form of CMD (not shell form) so your app is PID 1, not a shell. Use a proper init system like <code>tini</code> (<code>docker run --init</code>). Implement SIGTERM handler in your application code.</p>
+        </div>
+      </div>
+
+    </div>
+  </div><!-- /interview -->
+
+</main>
+
+<script>
+  function showTab(name) {
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    const panel = document.getElementById('tab-' + name);
+    if (panel) { panel.classList.add('active'); panel.classList.remove('fade-in'); void panel.offsetWidth; panel.classList.add('fade-in'); }
+    event.target.classList.add('active');
+  }
+
+  function toggleQA(el) {
+    const item = el.parentElement;
+    item.classList.toggle('open');
+  }
+</script>
+</body>
+</html>
